@@ -1,0 +1,33 @@
+{
+  "name": "mm-homebridge-plugins",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Spec-correct Homebridge plugins for the MM household: Bond, Modern Forms fans, IntelliFire fireplaces, Litter-Robot 4.",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": "^22.10.0 || ^24.0.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint . --max-warnings=0",
+    "pack": "node scripts/pack.mjs",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.0",
+    "@homebridge/hap-nodejs": "2.2.2",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.30.0",
+    "homebridge": "^2.4.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.35.0",
+    "vitest": "^3.2.0"
+  }
+}

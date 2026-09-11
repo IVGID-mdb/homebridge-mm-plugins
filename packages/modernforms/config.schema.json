@@ -1,0 +1,53 @@
+{
+  "pluginAlias": "MMModernForms",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Modern Forms / WAC Lighting smart fans, controlled directly over your LAN. Give each fan a fixed IP (DHCP reservation) and list it here.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "Modern Forms",
+        "required": true
+      },
+      "fans": {
+        "title": "Fans",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "host": {
+              "title": "IP address or hostname",
+              "type": "string",
+              "required": true,
+              "placeholder": "192.168.0.121"
+            },
+            "name": {
+              "title": "Name override (optional)",
+              "type": "string"
+            }
+          }
+        }
+      },
+      "pollIntervalSec": {
+        "title": "Poll interval (seconds)",
+        "type": "integer",
+        "default": 15,
+        "minimum": 3,
+        "maximum": 3600
+      },
+      "breezeAsSwingMode": {
+        "title": "Expose Breeze mode as HomeKit Oscillate (Swing Mode)",
+        "type": "boolean",
+        "default": false
+      },
+      "removeStale": {
+        "title": "Remove accessories that are no longer configured",
+        "type": "boolean",
+        "default": true
+      }
+    }
+  }
+}

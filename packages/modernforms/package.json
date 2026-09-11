@@ -1,0 +1,32 @@
+{
+  "name": "homebridge-mm-modernforms",
+  "displayName": "MM Modern Forms / WAC Smart Fans",
+  "version": "0.1.0",
+  "description": "Modern Forms and WAC Lighting smart ceiling fans for Homebridge over the local /mf JSON API. Fanv2 + Lightbulb, spec-correct.",
+  "license": "MIT",
+  "author": "mdb",
+  "type": "module",
+  "main": "dist/index.js",
+  "files": [
+    "dist/index.js",
+    "config.schema.json",
+    "README.md"
+  ],
+  "keywords": [
+    "homebridge-plugin",
+    "modern-forms",
+    "wac",
+    "ceiling-fan"
+  ],
+  "engines": {
+    "node": "^22.10.0 || ^24.0.0",
+    "homebridge": "^1.8.0 || ^2.0.0"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build.mjs modernforms",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@mm/hb-core": "*"
+  }
+}

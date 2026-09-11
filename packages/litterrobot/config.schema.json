@@ -1,0 +1,60 @@
+{
+  "pluginAlias": "MMLitterRobot",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Uses your Whisker app account. The robot shows up as an Air Purifier tile (Idle / Cleaning) with waste-drawer and litter levels attached, plus a Cat Detected sensor, a Clean Cycle button and the night light.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "Litter-Robot",
+        "required": true
+      },
+      "username": {
+        "title": "Whisker account email",
+        "type": "string",
+        "required": true
+      },
+      "password": {
+        "title": "Whisker account password",
+        "type": "string",
+        "required": true,
+        "x-schema-form": { "type": "password" }
+      },
+      "pollIntervalSec": {
+        "title": "Poll interval (seconds)",
+        "type": "integer",
+        "default": 60,
+        "minimum": 15,
+        "maximum": 3600
+      },
+      "exposeCleanSwitch": {
+        "title": "Expose a \"Clean Cycle\" switch",
+        "type": "boolean",
+        "default": true
+      },
+      "exposeNightLight": {
+        "title": "Expose the night light",
+        "type": "boolean",
+        "default": true
+      },
+      "exposeOccupancy": {
+        "title": "Expose a \"Cat Detected\" occupancy sensor",
+        "type": "boolean",
+        "default": true
+      },
+      "exposeResetSwitch": {
+        "title": "Expose a \"Reset Waste Gauge\" switch",
+        "type": "boolean",
+        "default": false
+      },
+      "removeStale": {
+        "title": "Remove robots no longer on the account",
+        "type": "boolean",
+        "default": true
+      }
+    }
+  }
+}

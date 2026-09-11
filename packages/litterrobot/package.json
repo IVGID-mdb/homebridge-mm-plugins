@@ -1,0 +1,31 @@
+{
+  "name": "homebridge-mm-litterrobot",
+  "displayName": "MM Litter-Robot 4",
+  "version": "0.1.0",
+  "description": "Whisker Litter-Robot 4 for Homebridge: cycle status, waste drawer and litter levels, cat-detected sensor, clean-cycle and night-light controls, using only standard HomeKit services.",
+  "license": "MIT",
+  "author": "mdb",
+  "type": "module",
+  "main": "dist/index.js",
+  "files": [
+    "dist/index.js",
+    "config.schema.json",
+    "README.md"
+  ],
+  "keywords": [
+    "homebridge-plugin",
+    "litter-robot",
+    "whisker"
+  ],
+  "engines": {
+    "node": "^22.10.0 || ^24.0.0",
+    "homebridge": "^1.8.0 || ^2.0.0"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build.mjs litterrobot",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@mm/hb-core": "*"
+  }
+}

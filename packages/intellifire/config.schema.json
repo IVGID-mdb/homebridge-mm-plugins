@@ -1,0 +1,95 @@
+{
+  "pluginAlias": "MMIntellifire",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Sign in with your IntelliFire app account once so the plugin can learn each fireplace's serial and API key. After that it talks to the fireplace directly on your LAN and only uses the cloud as a fallback.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "IntelliFire",
+        "required": true
+      },
+      "username": {
+        "title": "IntelliFire account email",
+        "type": "string"
+      },
+      "password": {
+        "title": "IntelliFire account password",
+        "type": "string",
+        "x-schema-form": { "type": "password" }
+      },
+      "user": {
+        "title": "Advanced: user cookie (from a previous login)",
+        "type": "string"
+      },
+      "auth_cookie": {
+        "title": "Advanced: auth_cookie (from a previous login)",
+        "type": "string"
+      },
+      "web_client_id": {
+        "title": "Advanced: web_client_id (from a previous login)",
+        "type": "string"
+      },
+      "mode": {
+        "title": "Control path",
+        "type": "string",
+        "default": "auto",
+        "oneOf": [
+          { "title": "Auto (local first, cloud fallback)", "enum": ["auto"] },
+          { "title": "Local only", "enum": ["local"] },
+          { "title": "Cloud only", "enum": ["cloud"] }
+        ]
+      },
+      "fireplaces": {
+        "title": "Fireplace overrides (optional)",
+        "description": "Only needed to pin a fixed IP or rename. Fireplaces are discovered from your account automatically.",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "serial": { "title": "Serial", "type": "string" },
+            "ip": { "title": "Fixed IP address", "type": "string" },
+            "name": { "title": "Name override", "type": "string" }
+          }
+        }
+      },
+      "localPollIntervalSec": {
+        "title": "Local poll interval (seconds)",
+        "type": "integer",
+        "default": 5,
+        "minimum": 2,
+        "maximum": 300
+      },
+      "cloudPollIntervalSec": {
+        "title": "Cloud poll interval (seconds)",
+        "type": "integer",
+        "default": 60,
+        "minimum": 15,
+        "maximum": 3600
+      },
+      "exposeSwitch": {
+        "title": "Also expose a plain on/off Switch",
+        "type": "boolean",
+        "default": false
+      },
+      "exposeBlower": {
+        "title": "Expose the blower fan (if the fireplace has one)",
+        "type": "boolean",
+        "default": true
+      },
+      "exposeLight": {
+        "title": "Expose the accent light (if the fireplace has one)",
+        "type": "boolean",
+        "default": true
+      },
+      "removeStale": {
+        "title": "Remove fireplaces no longer on the account",
+        "type": "boolean",
+        "default": true
+      }
+    }
+  }
+}

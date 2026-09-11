@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/bond" },
+    { "path": "packages/modernforms" },
+    { "path": "packages/intellifire" },
+    { "path": "packages/litterrobot" }
+  ]
+}

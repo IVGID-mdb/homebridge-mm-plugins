@@ -1,0 +1,60 @@
+{
+  "pluginAlias": "MMBond",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Controls devices paired to a Bond Bridge over the local network. Get the token from the Bond app: Settings → (your bridge) → Advanced → Local Token.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "Bond",
+        "required": true
+      },
+      "bonds": {
+        "title": "Bond Bridges",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "host": {
+              "title": "IP address or hostname",
+              "type": "string",
+              "required": true,
+              "placeholder": "192.168.0.61"
+            },
+            "token": {
+              "title": "Local token",
+              "type": "string",
+              "required": true
+            }
+          }
+        }
+      },
+      "pollIntervalSec": {
+        "title": "Poll interval (seconds)",
+        "description": "How often to re-read device state. Push updates (BPUP) arrive instantly regardless; polling is the safety net.",
+        "type": "integer",
+        "default": 60,
+        "minimum": 5,
+        "maximum": 3600
+      },
+      "push": {
+        "title": "Use Bond push updates (BPUP)",
+        "type": "boolean",
+        "default": true
+      },
+      "removeStale": {
+        "title": "Remove accessories no longer present on the Bond",
+        "type": "boolean",
+        "default": true
+      },
+      "exclude": {
+        "title": "Device IDs to hide from HomeKit",
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  }
+}

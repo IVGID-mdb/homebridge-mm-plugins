@@ -1,0 +1,32 @@
+{
+  "name": "homebridge-mm-bond",
+  "displayName": "MM Bond Bridge",
+  "version": "0.1.0",
+  "description": "Bond Bridge (RF ceiling fans, lights, fireplaces, shades) for Homebridge, using the local API with push updates. Exposes only spec-correct HomeKit services.",
+  "license": "MIT",
+  "author": "mdb",
+  "type": "module",
+  "main": "dist/index.js",
+  "files": [
+    "dist/index.js",
+    "config.schema.json",
+    "README.md"
+  ],
+  "keywords": [
+    "homebridge-plugin",
+    "bond",
+    "bond-bridge",
+    "ceiling-fan"
+  ],
+  "engines": {
+    "node": "^22.10.0 || ^24.0.0",
+    "homebridge": "^1.8.0 || ^2.0.0"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build.mjs bond",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@mm/hb-core": "*"
+  }
+}
