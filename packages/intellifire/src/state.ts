@@ -28,7 +28,10 @@ export interface FireplaceState {
 }
 
 export const FLAME_LEVELS = 4; // 0..4
+/** Blower speeds on the most commonly documented units. Configurable: some have six. */
 export const FAN_LEVELS = 4; // 0..4
+/** Upper bound accepted by the command validator, so a six-speed unit is not rejected. */
+export const MAX_FAN_LEVELS = 6;
 export const LIGHT_LEVELS = 3; // 0..3
 export const SETPOINT_MIN_C = 10;
 /**
@@ -87,7 +90,9 @@ export type FireplaceCommand = 'power' | 'height' | 'fanspeed' | 'light' | 'setp
 export const COMMAND_NAMES: Record<FireplaceCommand, { cloud: string; local: string; min: number; max: number }> = {
   power: { cloud: 'power', local: 'power', min: 0, max: 1 },
   height: { cloud: 'height', local: 'flame_height', min: 0, max: FLAME_LEVELS },
-  fanspeed: { cloud: 'fanspeed', local: 'fan_speed', min: 0, max: FAN_LEVELS },
+  // The reference library documents 0..4, but real units vary and at least one has six speeds,
+  // so the hard bound is widened here and the plugin only ever sends within the configured count.
+  fanspeed: { cloud: 'fanspeed', local: 'fan_speed', min: 0, max: MAX_FAN_LEVELS },
   light: { cloud: 'light', local: 'light', min: 0, max: LIGHT_LEVELS },
   setpoint: { cloud: 'setpoint', local: 'thermostat_setpoint', min: 0, max: 3700 },
   pilot: { cloud: 'pilot', local: 'pilot', min: 0, max: 1 },

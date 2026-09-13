@@ -80,6 +80,14 @@
         "type": "boolean",
         "default": true
       },
+      "blowerSpeeds": {
+        "title": "Number of blower speeds",
+        "description": "How many speeds your blower actually has, not counting off. Most units document four; some have six. Set this wrong and the top speeds are either unreachable or rejected.",
+        "type": "integer",
+        "default": 4,
+        "minimum": 1,
+        "maximum": 6
+      },
       "exposeLight": {
         "title": "Expose the accent light (if the fireplace has one)",
         "type": "boolean",

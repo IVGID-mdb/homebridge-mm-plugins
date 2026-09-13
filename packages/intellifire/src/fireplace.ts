@@ -13,7 +13,7 @@ import {
   setAccessoryInfo,
 } from '@mm/hb-core';
 import type { FireplaceCommand, FireplaceState } from './state.js';
-import { FAN_LEVELS, FLAME_LEVELS, LIGHT_LEVELS, SETPOINT_MAX_C, SETPOINT_MIN_C, parseFireplaceState } from './state.js';
+import { FLAME_LEVELS, LIGHT_LEVELS, SETPOINT_MAX_C, SETPOINT_MIN_C, parseFireplaceState } from './state.js';
 import type { FireplaceTransport } from './transport.js';
 
 export interface FireplaceDeps {
@@ -24,6 +24,8 @@ export interface FireplaceDeps {
   exposeSwitch: boolean;
   exposeBlower: boolean;
   exposeLight: boolean;
+  /** How many blower speeds this unit actually has. Varies by model; 4 is the common case. */
+  blowerSpeeds: number;
 }
 
 export interface FireplaceIdentity {
@@ -135,7 +137,7 @@ export class FireplaceAccessory implements AccessoryHandler {
       this.blower
         .getCharacteristic(C.RotationSpeed)
         .setProps({ minValue: 0, maxValue: 100, minStep: 1 })
-        .onGet(() => levelToPercent(this.current().fanspeed, FAN_LEVELS))
+        .onGet(() => levelToPercent(this.current().fanspeed, this.deps.blowerSpeeds))
         .onSet((v) => this.blowerWrites.write('speed', Number(v)));
     }
 
@@ -243,7 +245,7 @@ export class FireplaceAccessory implements AccessoryHandler {
       return;
     }
     if (ch.speed !== undefined && ch.speed > 0) {
-      await this.send('fanspeed', percentToLevel(ch.speed, FAN_LEVELS));
+      await this.send('fanspeed', percentToLevel(ch.speed, this.deps.blowerSpeeds));
       return;
     }
     if (ch.active === C.Active.ACTIVE) {
@@ -265,7 +267,7 @@ export class FireplaceAccessory implements AccessoryHandler {
     }
     if (this.blower) {
       this.blower.updateCharacteristic(C.Active, s.fanspeed > 0 ? C.Active.ACTIVE : C.Active.INACTIVE);
-      this.blower.updateCharacteristic(C.RotationSpeed, levelToPercent(s.fanspeed, FAN_LEVELS));
+      this.blower.updateCharacteristic(C.RotationSpeed, levelToPercent(s.fanspeed, this.deps.blowerSpeeds));
     }
     if (this.light) {
       this.light.updateCharacteristic(C.On, s.light > 0);

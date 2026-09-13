@@ -23,6 +23,8 @@ export interface IntellifirePlatformConfig {
   exposeSwitch?: boolean;
   exposeBlower?: boolean;
   exposeLight?: boolean;
+  /** Blower speed count for this unit. Common units have 4; some have 6. */
+  blowerSpeeds?: number;
   removeStale?: boolean;
   /** Undocumented: override endpoints (tests). */
   cloudBaseUrl?: string;

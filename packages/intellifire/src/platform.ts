@@ -142,6 +142,7 @@ export class IntellifirePlatform extends BasePlatform<FireplaceContext> {
         exposeSwitch: Boolean(this.cfg.exposeSwitch),
         exposeBlower: this.cfg.exposeBlower ?? true,
         exposeLight: this.cfg.exposeLight ?? true,
+        blowerSpeeds: numberOption(this.cfg.blowerSpeeds, 4, 1, 6),
       },
       accessory,
       { serial: ctx.serial, name: ctx.name, brand: ctx.brand },
