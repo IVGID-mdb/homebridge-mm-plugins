@@ -43,7 +43,6 @@ export class LitterRobotPlatform extends BasePlatform<RobotContext> {
     return onboarded.map((r) => ({
       uniqueId: r.serial,
       displayName: r.name || `Litter-Robot ${r.serial}`,
-      category: this.api.hap.Categories.AIR_PURIFIER,
       context: { serial: r.serial, unitId: r.unitId, name: r.name, last: r },
     }));
   }
@@ -56,10 +55,13 @@ export class LitterRobotPlatform extends BasePlatform<RobotContext> {
         log: prefixed(this.log, d.displayName),
         whisker: this.whisker,
         pollIntervalMs: this.pollMs,
-        exposeCleanSwitch: this.cfg.exposeCleanSwitch ?? true,
-        exposeNightLight: this.cfg.exposeNightLight ?? true,
-        exposeOccupancy: this.cfg.exposeOccupancy ?? true,
-        exposeResetSwitch: Boolean(this.cfg.exposeResetSwitch),
+        exposeDrawerAlert: this.cfg.exposeDrawerAlert ?? true,
+        exposeResetSwitch: this.cfg.exposeResetSwitch ?? true,
+        exposeCleanCycle: this.cfg.exposeCleanCycle ?? true,
+        alertWhenPoweredOff: this.cfg.alertWhenPoweredOff ?? true,
+        attentionDebounceMs: numberOption(this.cfg.attentionDebounceMinutes, 15, 0, 240) * 60_000,
+        litterLowPercent: numberOption(this.cfg.litterLowPercent, 15, 0, 100),
+        staleMs: numberOption(this.cfg.staleMinutes, 60, 5, 1440) * 60_000,
       },
       accessory,
       d.context.last,

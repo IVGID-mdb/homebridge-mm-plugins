@@ -1,21 +1,41 @@
 # homebridge-mm-litterrobot
 
-Whisker Litter-Robot 4 in HomeKit using only standard services.
+Whisker Litter-Robot 4 in HomeKit, scoped to the four things that actually get acted on.
 
 ## What you get
 
-| Service | Meaning |
+| Service | What it is for |
 | --- | --- |
-| **AirPurifier** (primary tile) | Active = powered; state Idle / Purifying (clean cycle running) |
-| ↳ FilterMaintenance "Waste Drawer" | FilterLifeLevel = 100 − drawer %, "Change" when the drawer is full |
-| ↳ FilterMaintenance "Litter Level" | FilterLifeLevel = litter %, "Change" below 20 % |
-| **OccupancySensor "Cat Detected"** | cat sensor; StatusActive = robot online |
-| **Switch "Clean Cycle"** | turn on to start a cycle; shows on while cycling |
-| **Lightbulb "Night Light"** | on = Auto, off = Off |
-| Switch "Reset Waste Gauge" (optional) | momentary |
+| Filter Maintenance "Waste Drawer" | Remaining drawer capacity from 0 to 100, a change indication when it is full, and Apple's own reset control |
+| Occupancy Sensor "Drawer Full" | The same fact, on a service certain to appear and able to trigger an automation or a notification |
+| Switch "Empty Drawer" | Momentary. Tells the robot you emptied the drawer |
+| Occupancy Sensor "Needs Attention" | Motor fault, bonnet removed, dirty sensor, hopper trouble, litter low, switched off, or not reporting in |
+| Switch "Clean Cycle" | Runs a cycle now. Refused while a cat is in the globe |
 
-Cat weight is deliberately not exposed: HomeKit has no weight characteristic and pretending it is a
-temperature just confuses Siri.
+The drawer is evaluated once and published to both carriers, so the gauge and the alert can never
+disagree with each other.
+
+## Three decisions worth knowing
+
+**The reset exists twice on purpose.** Apple defines a reset control on the filter service and it is
+exactly right for "I emptied it". Nothing documents whether the Home app actually draws it, and if it
+does not, a full-drawer alert would latch forever with no way to clear it. So a plain switch carries
+the same command. Turn off `exposeResetSwitch` once you have seen the filter control work.
+
+**A switched-off robot counts as a problem.** A tripped breaker, an unplugged cord and a knocked
+power switch all reach the cloud as the same value, and none of them is a deliberate choice. It is
+reported after a debounce, configurable, and can be turned off entirely.
+
+**Silence is treated as a fault, not as good news.** If the cloud goes away, or admits its data is
+hours old, everything else on the accessory reports No Response. The attention sensor deliberately
+keeps answering, because the failure it exists to report must not be the failure that silences it.
+
+## Deliberately absent
+
+Night light, child lock, panel brightness, clump time, sleep schedule, cat weight and lifetime
+counters. Also absent is a cat-overdue alarm. A cat that stops using the box is a real emergency, but
+this robot reports only that *a* cat visited. In a two-cat household such an alarm cannot detect one
+cat of two falling ill, which is the case that matters, so it would offer false comfort.
 
 ## Config
 
@@ -26,13 +46,14 @@ temperature just confuses Siri.
   "username": "you@example.com",
   "password": "…",
   "pollIntervalSec": 60,
-  "exposeCleanSwitch": true,
-  "exposeNightLight": true,
-  "exposeOccupancy": true,
-  "exposeResetSwitch": false
+  "exposeDrawerAlert": true,
+  "exposeResetSwitch": true,
+  "exposeCleanCycle": true,
+  "alertWhenPoweredOff": true,
+  "attentionDebounceMinutes": 15,
+  "staleMinutes": 60
 }
 ```
 
-Authentication is AWS Cognito `USER_PASSWORD_AUTH` (same client the app uses) with refresh-token
-renewal; tokens are never logged. Data comes from the `lr4.iothings.site` GraphQL API; commands go
-through `sendLitterRobot4Command` with the command names used by the official app.
+Authentication is AWS Cognito with refresh-token renewal, the same client the app uses. Tokens are
+never logged.

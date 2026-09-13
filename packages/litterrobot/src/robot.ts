@@ -1,8 +1,8 @@
 import type { API, PlatformAccessory, Service } from 'homebridge';
 import type { AccessoryHandler, Log } from '@mm/hb-core';
 import { Poller, commFailure, ensureService, errorMessage, pruneServices, sanitizeVersion, setAccessoryInfo } from '@mm/hb-core';
-import { viewOf } from './robot-state.js';
-import type { RobotView } from './robot-state.js';
+import { attentionOf, viewOf } from './robot-state.js';
+import type { AttentionState, RobotView } from './robot-state.js';
 import { LR4Command } from './whisker-api.js';
 import type { RobotData, WhiskerApi } from './whisker-api.js';
 
@@ -11,39 +11,52 @@ export interface RobotDeps {
   log: Log;
   whisker: WhiskerApi;
   pollIntervalMs: number;
-  exposeCleanSwitch: boolean;
-  exposeNightLight: boolean;
-  exposeOccupancy: boolean;
+  exposeDrawerAlert: boolean;
   exposeResetSwitch: boolean;
+  exposeCleanCycle: boolean;
+  alertWhenPoweredOff: boolean;
+  attentionDebounceMs: number;
+  litterLowPercent: number;
+  staleMs: number;
 }
 
 /**
- * Litter-Robot 4 → standard HomeKit services only:
+ * Litter-Robot 4, scoped to the four things that actually matter to the owner: how full the waste
+ * drawer is, telling it you emptied it, whether anything is wrong, and running a cycle now.
  *
- *  AirPurifier (primary)      Active ← powered → powerOn/powerOff
- *                             CurrentAirPurifierState ← INACTIVE / IDLE / PURIFYING_AIR (clean cycle)
- *                             TargetAirPurifierState = AUTO (only valid value)
- *    ↳ FilterMaintenance "Waste Drawer"  FilterChangeIndication ← isDFIFull, FilterLifeLevel ← 100 − DFILevelPercent
- *    ↳ FilterMaintenance "Litter Level"  FilterLifeLevel ← litterLevelPercentage
- *  OccupancySensor "Cat Detected"        OccupancyDetected ← cat sensor, StatusActive ← online
- *  Switch "Clean Cycle"                  On ← cycling; set On → cleanCycle (momentary)
- *  Lightbulb "Night Light"               On ← nightLightMode ≠ OFF → nightLightModeAuto / nightLightModeOff
- *  Switch "Reset Waste Gauge" (opt.)     set On → shortResetPress (momentary)
+ *  FilterMaintenance "Waste Drawer"   FilterChangeIndication ← drawer full
+ *                                     FilterLifeLevel        ← 100 − DFILevelPercent (remaining capacity)
+ *                                     ResetFilterIndication  → shortResetPress
+ *  OccupancySensor "Drawer Full"      the same fact on a service that certainly renders and can
+ *                                     drive an automation. Computed once and fanned out, so the
+ *                                     two can never disagree.
+ *  Switch "Empty Drawer"              momentary → shortResetPress. Belt and braces: the filter
+ *                                     service's own reset may not be reachable by touch, and this
+ *                                     is the control the owner needs most.
+ *  OccupancySensor "Needs Attention"  motor fault, bonnet off, dirty sensor, hopper trouble,
+ *                                     litter low, switched off, or not reporting in.
+ *  Switch "Clean Cycle"               → cleanCycle, REFUSED while a cat is in the globe.
  *
- * Nothing is faked as a temperature or humidity sensor.
+ * Deliberately absent: night light, child lock, panel brightness, clump time, sleep schedule, cat
+ * weight and lifetime counters. Also absent is a cat-overdue alarm: this household has two cats and
+ * the robot reports only "a cat", so such an alarm could not detect the case that matters, one cat
+ * of two falling ill.
+ *
+ * Nothing is faked as a temperature, humidity or air-quality reading.
  */
 export class LitterRobotAccessory implements AccessoryHandler {
-  private readonly purifier: Service;
   private readonly drawer: Service;
-  private readonly litter: Service;
-  private readonly occupancy: Service | undefined;
-  private readonly cleanSwitch: Service | undefined;
-  private readonly nightLight: Service | undefined;
+  private readonly drawerAlert: Service | undefined;
   private readonly resetSwitch: Service | undefined;
+  private readonly attention: Service;
+  private readonly cleanSwitch: Service | undefined;
   private readonly poller: Poller;
   private data: RobotData;
   private view: RobotView;
   private cleanRequestedAt = 0;
+  private offlineSince: number | undefined;
+  private poweredOffSince: number | undefined;
+  private lastReasons = '';
 
   constructor(
     private readonly deps: RobotDeps,
@@ -61,84 +74,84 @@ export class LitterRobotAccessory implements AccessoryHandler {
     });
     const keep = new Set<Service>();
 
-    this.purifier = ensureService(deps.api, accessory, S.AirPurifier, accessory.displayName);
-    keep.add(this.purifier);
-    this.purifier
-      .getCharacteristic(C.Active)
-      .onGet(() => (this.current().powered ? C.Active.ACTIVE : C.Active.INACTIVE))
-      .onSet((v) => this.command(Number(v) === C.Active.ACTIVE ? LR4Command.POWER_ON : LR4Command.POWER_OFF));
-    this.purifier.getCharacteristic(C.CurrentAirPurifierState).onGet(() => this.purifierState(this.current()));
-    // Set a valid value BEFORE restricting validValues, otherwise HAP warns about the default (MANUAL=0).
-    this.purifier.getCharacteristic(C.TargetAirPurifierState).updateValue(C.TargetAirPurifierState.AUTO);
-    this.purifier
-      .getCharacteristic(C.TargetAirPurifierState)
-      .setProps({ validValues: [C.TargetAirPurifierState.AUTO] })
-      .onGet(() => C.TargetAirPurifierState.AUTO)
-      .onSet(() => undefined);
-
+    // ---- the chore: how full, and telling it you emptied it -------------------------------
     this.drawer = ensureService(deps.api, accessory, S.FilterMaintenance, 'Waste Drawer', 'drawer');
     keep.add(this.drawer);
     this.drawer
       .getCharacteristic(C.FilterChangeIndication)
-      .onGet(() => (this.current().drawerFull ? C.FilterChangeIndication.CHANGE_FILTER : C.FilterChangeIndication.FILTER_OK));
-    this.drawer.getCharacteristic(C.FilterLifeLevel).onGet(() => this.current().drawerRemainingPct);
-    this.purifier.addLinkedService(this.drawer);
+      .onGet(() => (this.guarded().drawerFull ? C.FilterChangeIndication.CHANGE_FILTER : C.FilterChangeIndication.FILTER_OK));
+    this.drawer.getCharacteristic(C.FilterLifeLevel).onGet(() => this.guarded().drawerRemainingPct);
+    // Write-only, min 1 max 1. Apple defines writing 1 as "the user dealt with it".
+    this.drawer.getCharacteristic(C.ResetFilterIndication).onSet(() => this.emptied());
 
-    this.litter = ensureService(deps.api, accessory, S.FilterMaintenance, 'Litter Level', 'litter');
-    keep.add(this.litter);
-    this.litter
-      .getCharacteristic(C.FilterChangeIndication)
-      .onGet(() => (this.current().litterPct < 20 ? C.FilterChangeIndication.CHANGE_FILTER : C.FilterChangeIndication.FILTER_OK));
-    this.litter.getCharacteristic(C.FilterLifeLevel).onGet(() => this.current().litterPct);
-    this.purifier.addLinkedService(this.litter);
-
-    if (deps.exposeOccupancy) {
-      this.occupancy = ensureService(deps.api, accessory, S.OccupancySensor, 'Cat Detected', 'cat');
-      keep.add(this.occupancy);
-      this.occupancy
+    if (deps.exposeDrawerAlert) {
+      this.drawerAlert = ensureService(deps.api, accessory, S.OccupancySensor, 'Drawer Full', 'drawer-alert');
+      keep.add(this.drawerAlert);
+      this.drawerAlert
         .getCharacteristic(C.OccupancyDetected)
-        .onGet(() => (this.current().catDetected ? C.OccupancyDetected.OCCUPANCY_DETECTED : C.OccupancyDetected.OCCUPANCY_NOT_DETECTED));
-      this.occupancy.getCharacteristic(C.StatusActive).onGet(() => this.current().online);
-    }
-
-    if (deps.exposeCleanSwitch) {
-      this.cleanSwitch = ensureService(deps.api, accessory, S.Switch, 'Clean Cycle', 'clean');
-      keep.add(this.cleanSwitch);
-      this.cleanSwitch
-        .getCharacteristic(C.On)
-        .onGet(() => this.cleanSwitchOn())
-        .onSet(async (v) => {
-          if (!v) return; // a cycle can't be cancelled from the API; just let the state catch up
-          await this.command(LR4Command.CLEAN_CYCLE);
-          this.cleanRequestedAt = Date.now();
-        });
-    }
-
-    if (deps.exposeNightLight) {
-      this.nightLight = ensureService(deps.api, accessory, S.Lightbulb, 'Night Light', 'nightlight');
-      keep.add(this.nightLight);
-      this.nightLight
-        .getCharacteristic(C.On)
-        .onGet(() => this.current().nightLightOn)
-        .onSet((v) => this.command(v ? LR4Command.NIGHT_LIGHT_MODE_AUTO : LR4Command.NIGHT_LIGHT_MODE_OFF, { nightLightMode: v ? 'AUTO' : 'OFF' }));
+        .onGet(() =>
+          this.guarded().drawerFull ? C.OccupancyDetected.OCCUPANCY_DETECTED : C.OccupancyDetected.OCCUPANCY_NOT_DETECTED,
+        );
+      this.drawerAlert.getCharacteristic(C.StatusActive).onGet(() => this.reachable());
+      this.drawerAlert.addLinkedService(this.drawer);
     }
 
     if (deps.exposeResetSwitch) {
-      this.resetSwitch = ensureService(deps.api, accessory, S.Switch, 'Reset Waste Gauge', 'reset');
+      this.resetSwitch = ensureService(deps.api, accessory, S.Switch, 'Empty Drawer', 'reset');
       keep.add(this.resetSwitch);
       this.resetSwitch
         .getCharacteristic(C.On)
         .onGet(() => false)
         .onSet(async (v) => {
           if (!v) return;
-          await this.command(LR4Command.SHORT_RESET_PRESS, { DFILevelPercent: 0, isDFIFull: false });
+          await this.emptied();
           setTimeout(() => this.resetSwitch?.updateCharacteristic(C.On, false), 1000).unref?.();
         });
     }
 
+    // ---- anything wrong -------------------------------------------------------------------
+    // Deliberately NOT behind the comm-failure guard: this is the one service that must keep
+    // answering when the cloud is unreachable, otherwise the failure it exists to report is the
+    // failure that silences it.
+    this.attention = ensureService(deps.api, accessory, S.OccupancySensor, 'Needs Attention', 'attention');
+    keep.add(this.attention);
+    this.attention
+      .getCharacteristic(C.OccupancyDetected)
+      .onGet(() =>
+        this.attentionState().needsAttention
+          ? C.OccupancyDetected.OCCUPANCY_DETECTED
+          : C.OccupancyDetected.OCCUPANCY_NOT_DETECTED,
+      );
+    this.attention.getCharacteristic(C.StatusActive).onGet(() => true);
+    this.attention.getCharacteristic(C.StatusFault).onGet(() =>
+      this.attentionState().hardwareFault ? C.StatusFault.GENERAL_FAULT : C.StatusFault.NO_FAULT,
+    );
+
+    // ---- run a cycle now ------------------------------------------------------------------
+    if (deps.exposeCleanCycle) {
+      this.cleanSwitch = ensureService(deps.api, accessory, S.Switch, 'Clean Cycle', 'clean');
+      keep.add(this.cleanSwitch);
+      this.cleanSwitch
+        .getCharacteristic(C.On)
+        .onGet(() => this.cleanSwitchOn())
+        .onSet(async (v) => {
+          if (!v) return; // the API cannot abort a running cycle; let the true state spring back
+          this.refuseIfCatInside();
+          await this.command(LR4Command.CLEAN_CYCLE, { robotStatus: 'ROBOT_CLEAN' });
+          this.cleanRequestedAt = Date.now();
+        });
+    }
+
+    // Mark the chore as the accessory's identity.
+    if (this.drawerAlert) this.drawerAlert.setPrimaryService(true);
+    else this.drawer.setPrimaryService(true);
+
     pruneServices(accessory, keep, deps.log);
-    this.push(initial);
+    // The poller must exist before the first push, because the reachability check reads its
+    // failure count. Building it later threw inside the constructor, which the platform caught,
+    // leaving an accessory whose services existed but whose handler was never registered.
     this.poller = new Poller(() => this.refresh(), { intervalMs: deps.pollIntervalMs, log: deps.log, name: 'poll' });
+    this.push(initial);
     this.poller.start();
   }
 
@@ -146,30 +159,96 @@ export class LitterRobotAccessory implements AccessoryHandler {
     this.poller.stop();
   }
 
-  /** Called by the platform when its account-wide poll already fetched fresh data. */
+  /** Called by the platform (and tests) when fresh data is already in hand. */
   update(data: RobotData): void {
     this.push(data);
   }
 
-  private current(): RobotView {
+  // ---- safety ------------------------------------------------------------------------------
+
+  /**
+   * A cycle rotates the globe. Exposing that to Siri, scenes and automations without a guard means
+   * one misheard phrase can turn it with a cat inside, so a detected cat refuses the write outright.
+   */
+  private refuseIfCatInside(): void {
+    if (!this.view.catDetected) return;
+    this.deps.log.warn('Refusing to start a clean cycle: the robot reports a cat in the globe.');
+    throw new this.deps.api.hap.HapStatusError(this.deps.api.hap.HAPStatus.RESOURCE_BUSY);
+  }
+
+  // ---- state -------------------------------------------------------------------------------
+
+  /** For everything except the attention sensor: report No Response rather than a stale number. */
+  private guarded(): RobotView {
     if (this.poller.consecutiveFailures >= 3) throw commFailure(this.deps.api);
     return this.view;
+  }
+
+  private isStale(): boolean {
+    const seen = this.view.lastSeenAt;
+    if (seen === undefined) return false;
+    return Date.now() - seen > this.deps.staleMs;
+  }
+
+  private reachable(): boolean {
+    return this.view.online && !this.isStale() && this.poller.consecutiveFailures === 0;
+  }
+
+  /** Elapsed-time bookkeeping, so a blip does not raise an alarm but a real outage does. */
+  private updateSustained(gotData: boolean): void {
+    const now = Date.now();
+    const reachable = gotData && this.view.online && !this.isStale();
+    if (reachable) {
+      this.offlineSince = undefined;
+      if (this.view.poweredOff) this.poweredOffSince ??= now;
+      else this.poweredOffSince = undefined;
+    } else {
+      this.offlineSince ??= now;
+      // While unreachable we cannot see the power switch, so do not claim it is off.
+      this.poweredOffSince = undefined;
+    }
+  }
+
+  private sustainedFor(since: number | undefined): boolean {
+    return since !== undefined && Date.now() - since >= this.deps.attentionDebounceMs;
+  }
+
+  private attentionState(): AttentionState {
+    return attentionOf(
+      this.view,
+      {
+        offline: this.sustainedFor(this.offlineSince),
+        poweredOff: this.deps.alertWhenPoweredOff && this.sustainedFor(this.poweredOffSince),
+      },
+      this.deps.litterLowPercent,
+    );
   }
 
   private cleanSwitchOn(): boolean {
     return this.view.cycling || Date.now() - this.cleanRequestedAt < 20_000;
   }
 
-  private purifierState(v: RobotView): number {
-    const C = this.deps.api.hap.Characteristic;
-    if (!v.powered) return C.CurrentAirPurifierState.INACTIVE;
-    if (v.cycling) return C.CurrentAirPurifierState.PURIFYING_AIR;
-    return C.CurrentAirPurifierState.IDLE;
+  // ---- device ------------------------------------------------------------------------------
+
+  private async emptied(): Promise<void> {
+    await this.command(LR4Command.SHORT_RESET_PRESS, { DFILevelPercent: 0, isDFIFull: false });
   }
 
   private async refresh(): Promise<void> {
-    const fresh = await this.deps.whisker.getRobot(this.data.serial);
-    if (fresh) this.push(fresh);
+    let fresh: RobotData | undefined;
+    try {
+      fresh = await this.deps.whisker.getRobot(this.data.serial);
+    } catch (err) {
+      this.updateSustained(false);
+      this.pushAttention();
+      throw err;
+    }
+    if (fresh) {
+      this.push(fresh);
+      return;
+    }
+    this.updateSustained(false);
+    this.pushAttention();
   }
 
   private async command(cmd: (typeof LR4Command)[keyof typeof LR4Command], expected: Partial<RobotData> = {}): Promise<void> {
@@ -180,40 +259,54 @@ export class LitterRobotAccessory implements AccessoryHandler {
       this.deps.log.warn(`${cmd} failed: ${errorMessage(err)}`);
       throw commFailure(this.deps.api);
     }
-    const optimistic: Partial<RobotData> =
-      cmd === LR4Command.POWER_ON
-        ? { unitPowerStatus: 'ON', robotStatus: 'ROBOT_IDLE' }
-        : cmd === LR4Command.POWER_OFF
-          ? { unitPowerStatus: 'OFF', robotStatus: 'ROBOT_POWER_OFF' }
-          : cmd === LR4Command.CLEAN_CYCLE
-            ? { robotStatus: 'ROBOT_CLEAN' }
-            : {};
-    const next = { ...this.data, ...optimistic, ...expected };
+    const next = { ...this.data, ...expected };
     setImmediate(() => this.push(next));
-    // The robot reports back within a few seconds; confirm then, and again a bit later.
+    // The robot reports back within a few seconds; confirm then, and again once it has settled.
     setTimeout(() => void this.poller.now(), 5000).unref?.();
     setTimeout(() => void this.poller.now(), 30_000).unref?.();
   }
 
+  // ---- publishing --------------------------------------------------------------------------
+
   private push(data: RobotData): void {
     const C = this.deps.api.hap.Characteristic;
     this.data = data;
-    const v = (this.view = viewOf(data));
-    this.purifier.updateCharacteristic(C.Active, v.powered ? C.Active.ACTIVE : C.Active.INACTIVE);
-    this.purifier.updateCharacteristic(C.CurrentAirPurifierState, this.purifierState(v));
-    this.purifier.updateCharacteristic(C.TargetAirPurifierState, C.TargetAirPurifierState.AUTO);
-    this.drawer.updateCharacteristic(C.FilterChangeIndication, v.drawerFull ? C.FilterChangeIndication.CHANGE_FILTER : C.FilterChangeIndication.FILTER_OK);
-    this.drawer.updateCharacteristic(C.FilterLifeLevel, v.drawerRemainingPct);
-    this.litter.updateCharacteristic(C.FilterChangeIndication, v.litterPct < 20 ? C.FilterChangeIndication.CHANGE_FILTER : C.FilterChangeIndication.FILTER_OK);
-    this.litter.updateCharacteristic(C.FilterLifeLevel, v.litterPct);
-    this.occupancy?.updateCharacteristic(C.OccupancyDetected, v.catDetected ? C.OccupancyDetected.OCCUPANCY_DETECTED : C.OccupancyDetected.OCCUPANCY_NOT_DETECTED);
-    this.occupancy?.updateCharacteristic(C.StatusActive, v.online);
+    this.view = viewOf(data);
+    this.updateSustained(true);
+
+    // One evaluation of the drawer, fanned out, so the gauge and the alert cannot disagree.
+    const full = this.view.drawerFull;
+    this.drawer.updateCharacteristic(C.FilterChangeIndication, full ? C.FilterChangeIndication.CHANGE_FILTER : C.FilterChangeIndication.FILTER_OK);
+    this.drawer.updateCharacteristic(C.FilterLifeLevel, this.view.drawerRemainingPct);
+    this.drawerAlert?.updateCharacteristic(
+      C.OccupancyDetected,
+      full ? C.OccupancyDetected.OCCUPANCY_DETECTED : C.OccupancyDetected.OCCUPANCY_NOT_DETECTED,
+    );
+    this.drawerAlert?.updateCharacteristic(C.StatusActive, this.reachable());
     this.cleanSwitch?.updateCharacteristic(C.On, this.cleanSwitchOn());
-    this.nightLight?.updateCharacteristic(C.On, v.nightLightOn);
+    this.pushAttention();
+
     if (data.espFirmware) {
       this.accessory
         .getService(this.deps.api.hap.Service.AccessoryInformation)
         ?.updateCharacteristic(C.FirmwareRevision, sanitizeVersion(String(data.espFirmware)));
+    }
+  }
+
+  private pushAttention(): void {
+    const C = this.deps.api.hap.Characteristic;
+    const a = this.attentionState();
+    this.attention.updateCharacteristic(
+      C.OccupancyDetected,
+      a.needsAttention ? C.OccupancyDetected.OCCUPANCY_DETECTED : C.OccupancyDetected.OCCUPANCY_NOT_DETECTED,
+    );
+    this.attention.updateCharacteristic(C.StatusActive, true);
+    this.attention.updateCharacteristic(C.StatusFault, a.hardwareFault ? C.StatusFault.GENERAL_FAULT : C.StatusFault.NO_FAULT);
+    const joined = a.reasons.join(', ');
+    if (joined !== this.lastReasons) {
+      this.lastReasons = joined;
+      if (joined) this.deps.log.warn(`Needs attention: ${joined}`);
+      else this.deps.log.info('Nothing needs attention.');
     }
   }
 }

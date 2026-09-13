@@ -58,14 +58,26 @@ export interface RobotData {
   sleepStatus?: string;
   wifiRssi?: number;
   odometerCleanCycles?: number;
+  /** Fault and freshness fields the "needs attention" sensor depends on. */
+  globeMotorFaultStatus?: string;
+  isLaserDirty?: boolean;
+  hopperStatus?: string;
+  isHopperRemoved?: boolean;
+  lastSeen?: string;
   [k: string]: unknown;
 }
 
+/**
+ * The exact field list requested from GraphQL. A field absent from here arrives as undefined no
+ * matter what the robot knows, so every field the accessory reads must appear in this list.
+ */
 export const ROBOT_FIELDS = [
   'name', 'serial', 'unitId', 'unitPowerStatus', 'robotStatus', 'robotCycleState', 'robotCycleStatus', 'catDetect',
   'isOnline', 'isOnboarded', 'isDFIFull', 'DFILevelPercent', 'litterLevelPercentage', 'litterLevelState',
   'nightLightMode', 'nightLightBrightness', 'isBonnetRemoved', 'catWeight', 'espFirmware', 'picFirmwareVersion',
   'laserBoardFirmwareVersion', 'sleepStatus', 'wifiRssi', 'odometerCleanCycles', 'isKeypadLockout', 'panelBrightnessHigh',
+  // Without these the fault sensor can never fire: they are what "something is wrong" is made of.
+  'globeMotorFaultStatus', 'isLaserDirty', 'hopperStatus', 'isHopperRemoved', 'lastSeen',
 ];
 
 interface Tokens {

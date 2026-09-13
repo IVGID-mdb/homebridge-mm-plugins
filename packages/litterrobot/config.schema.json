@@ -2,7 +2,7 @@
   "pluginAlias": "MMLitterRobot",
   "pluginType": "platform",
   "singular": true,
-  "headerDisplay": "Uses your Whisker app account. The robot shows up as an Air Purifier tile (Idle / Cleaning) with waste-drawer and litter levels attached, plus a Cat Detected sensor, a Clean Cycle button and the night light.",
+  "headerDisplay": "Uses your Whisker app account. Scoped to four things: how full the waste drawer is, telling it you emptied it, whether anything is wrong, and running a cycle now. A clean cycle is refused while the robot reports a cat in the globe.",
   "schema": {
     "type": "object",
     "properties": {
@@ -30,25 +30,51 @@
         "minimum": 15,
         "maximum": 3600
       },
-      "exposeCleanSwitch": {
-        "title": "Expose a \"Clean Cycle\" switch",
-        "type": "boolean",
-        "default": true
-      },
-      "exposeNightLight": {
-        "title": "Expose the night light",
-        "type": "boolean",
-        "default": true
-      },
-      "exposeOccupancy": {
-        "title": "Expose a \"Cat Detected\" occupancy sensor",
+      "exposeDrawerAlert": {
+        "title": "Expose a \"Drawer Full\" sensor",
+        "description": "Carries the same fact as the waste drawer gauge, on a service that is certain to appear and can trigger an automation. Turn off once you have confirmed the gauge itself is visible.",
         "type": "boolean",
         "default": true
       },
       "exposeResetSwitch": {
-        "title": "Expose a \"Reset Waste Gauge\" switch",
+        "title": "Expose an \"Empty Drawer\" switch",
+        "description": "The waste drawer service carries its own reset, but it may not be reachable by touch in the Home app. This switch always is.",
         "type": "boolean",
-        "default": false
+        "default": true
+      },
+      "exposeCleanCycle": {
+        "title": "Expose a \"Clean Cycle\" switch",
+        "type": "boolean",
+        "default": true
+      },
+      "alertWhenPoweredOff": {
+        "title": "Treat a switched-off robot as needing attention",
+        "description": "A tripped breaker, an unplugged cord or a knocked switch all look the same to the cloud, and none of them is intentional.",
+        "type": "boolean",
+        "default": true
+      },
+      "attentionDebounceMinutes": {
+        "title": "Minutes before an outage counts",
+        "type": "integer",
+        "default": 15,
+        "minimum": 0,
+        "maximum": 240
+      },
+      "litterLowPercent": {
+        "title": "Litter low threshold (percent)",
+        "description": "Only consulted when the robot does not report a litter state of its own.",
+        "type": "integer",
+        "default": 15,
+        "minimum": 0,
+        "maximum": 100
+      },
+      "staleMinutes": {
+        "title": "Treat data older than this as not reporting in",
+        "description": "The cloud sometimes claims a robot is online while serving a reading hours old.",
+        "type": "integer",
+        "default": 60,
+        "minimum": 5,
+        "maximum": 1440
       },
       "removeStale": {
         "title": "Remove robots no longer on the account",
