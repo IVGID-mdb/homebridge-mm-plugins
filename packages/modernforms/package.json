@@ -1,7 +1,7 @@
 {
   "name": "homebridge-mm-modernforms",
   "displayName": "MM Modern Forms / WAC Smart Fans",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Modern Forms and WAC Lighting smart ceiling fans for Homebridge over the local /mf JSON API. Fanv2 + Lightbulb, spec-correct.",
   "license": "MIT",
   "author": "mdb",

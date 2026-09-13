@@ -1,7 +1,7 @@
 {
   "name": "homebridge-mm-bond",
   "displayName": "MM Bond Bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Bond Bridge (RF ceiling fans, lights, fireplaces, shades) for Homebridge, using the local API with push updates. Exposes only spec-correct HomeKit services.",
   "license": "MIT",
   "author": "mdb",

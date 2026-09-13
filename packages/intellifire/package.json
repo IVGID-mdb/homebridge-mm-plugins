@@ -1,7 +1,7 @@
 {
   "name": "homebridge-mm-intellifire",
   "displayName": "MM IntelliFire Fireplace",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Hearth & Home IntelliFire gas fireplaces for Homebridge. Local control over your LAN (challenge-response API) with cloud fallback, exposed as a HomeKit HeaterCooler (power, flame height, thermostat, room temperature) plus optional blower fan and accent light.",
   "license": "MIT",
   "author": "mdb",
