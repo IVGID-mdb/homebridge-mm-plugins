@@ -1,7 +1,7 @@
 {
   "name": "homebridge-mm-litterrobot",
   "displayName": "MM Litter-Robot 4",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Whisker Litter-Robot 4 for Homebridge, scoped to four things: waste drawer level, an I-emptied-it reset, a fault sensor that keeps answering when the cloud does not, and a clean cycle refused while a cat is in the globe.",
   "license": "MIT",
   "author": "mdb",

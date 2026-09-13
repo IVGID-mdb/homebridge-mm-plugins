@@ -76,13 +76,49 @@ describe('robot view mapping', () => {
     expect(attentionOf(viewOf(robot({ globeMotorFaultStatus: 'FAULT_MOTOR_STALL' })), quiet, 15)).toMatchObject({ needsAttention: true, hardwareFault: true });
     expect(attentionOf(viewOf(robot({ isBonnetRemoved: true })), quiet, 15)).toMatchObject({ needsAttention: true, hardwareFault: false });
     expect(attentionOf(viewOf(robot({ isLaserDirty: true })), quiet, 15).hardwareFault).toBe(true);
-    expect(attentionOf(viewOf(robot({ isHopperRemoved: true })), quiet, 15).needsAttention).toBe(true);
+    // Only counts when a hopper is actually fitted; the not-fitted case is covered separately.
+    expect(attentionOf(viewOf(robot({ hopperStatus: 'ENABLED', isHopperRemoved: true })), quiet, 15).needsAttention).toBe(true);
     expect(attentionOf(viewOf(robot({ litterLevelState: 'LOW' })), quiet, 15).reasons).toContain('litter running low');
     // Connectivity causes arrive as sustained flags, not from the payload.
     expect(attentionOf(viewOf(robot()), { offline: true, poweredOff: false }, 15).reasons).toContain('not reporting in');
     expect(attentionOf(viewOf(robot()), { offline: false, poweredOff: true }, 15)).toMatchObject({ needsAttention: true, hardwareFault: false });
     // A motor fault reported as a benign string is not a fault.
     expect(attentionOf(viewOf(robot({ globeMotorFaultStatus: 'FAULT_CLEAR' })), quiet, 15).needsAttention).toBe(false);
+  });
+
+  it('fails CLOSED on an unfamiliar cat value, because that predicate gates a rotating globe', () => {
+    // Only a positively recognised clear value means the globe is empty.
+    expect(viewOf(robot({ catDetect: 'CAT_DETECT_CLEAR' })).catDetected).toBe(false);
+    expect(viewOf(robot({ catDetect: '' })).catDetected).toBe(false);
+    // Anything else counts as a cat, including a value this code has never seen.
+    for (const v of ['CAT_DETECT', 'CAT_SENSED', 'PRESENT', 'detected', 'WHATEVER_NEW_ENUM']) {
+      expect(viewOf(robot({ catDetect: v })).catDetected, `catDetect=${v}`).toBe(true);
+    }
+    // An unfamiliar value is flagged so it can be logged rather than silently trusted.
+    expect(viewOf(robot({ catDetect: 'WHATEVER_NEW_ENUM' })).catDetectRecognised).toBe(false);
+    expect(viewOf(robot({ catDetect: 'CAT_DETECT_CLEAR' })).catDetectRecognised).toBe(true);
+  });
+
+  it('fails OPEN on an unfamiliar motor status, so a healthy robot cannot latch a permanent fault', () => {
+    for (const v of ['FAULT_MOTOR_STALL', 'MOTOR_JAM', 'OVERCURRENT']) {
+      expect(viewOf(robot({ globeMotorFaultStatus: v })).motorFault, `motor=${v}`).toBe(true);
+    }
+    for (const v of ['', 'OK', 'NOMINAL', 'MOTOR_OK', 'FAULT_CLEAR', 'SOME_NEW_NOMINAL_STRING']) {
+      expect(viewOf(robot({ globeMotorFaultStatus: v })).motorFault, `motor=${v}`).toBe(false);
+    }
+  });
+
+  it('does not treat a hopper that was never fitted as a fault', () => {
+    // No hopper on the account: the robot still reports it removed, which must not raise anything.
+    expect(viewOf(robot({ isHopperRemoved: true })).hopperFitted).toBe(false);
+    expect(attentionOf(viewOf(robot({ isHopperRemoved: true })), quiet, 15).needsAttention).toBe(false);
+    // A hopper that is present and fine is fine.
+    expect(attentionOf(viewOf(robot({ hopperStatus: 'ENABLED' })), quiet, 15).needsAttention).toBe(false);
+    // A hopper that is present and in trouble is reported.
+    expect(attentionOf(viewOf(robot({ hopperStatus: 'ENABLED', isHopperRemoved: true })), quiet, 15).reasons).toContain('litter hopper removed or jammed');
+    expect(attentionOf(viewOf(robot({ hopperStatus: 'HOPPER_JAM' })), quiet, 15).reasons).toContain('litter hopper removed or jammed');
+    // An unfamiliar but non-fault hopper string does not latch an alert.
+    expect(attentionOf(viewOf(robot({ hopperStatus: 'SOME_NEW_STATE' })), quiet, 15).needsAttention).toBe(false);
   });
 });
 
@@ -245,6 +281,50 @@ describe('MMLitterRobot platform', () => {
     const { Service: S, Characteristic: C } = fake.api.hap;
     cloud.graphqlFailWith = 503;
     await expect(homekitWrite(acc.getServiceById(S.Switch, 'reset')!, C.On, true)).rejects.toBe(-70402);
+  });
+
+  it('keeps the alert up when a switched-off robot then goes silent', async () => {
+    const acc = await launch({ attentionDebounceMinutes: 0 });
+    const { Service: S, Characteristic: C } = fake.api.hap;
+    const att = acc.getServiceById(S.OccupancySensor, 'attention')!;
+
+    handlerFor(acc).update(robot({ unitPowerStatus: 'OFF', robotStatus: 'ROBOT_POWER_OFF' }));
+    expect(att.getCharacteristic(C.OccupancyDetected).value).toBe(1);
+    // The cause changes from "switched off" to "not reporting in". The alert must not clear while
+    // the situation is getting worse, which a second independent clock used to cause.
+    handlerFor(acc).update(robot({ unitPowerStatus: 'OFF', robotStatus: 'ROBOT_POWER_OFF', lastSeen: new Date(Date.now() - 6 * 3600_000).toISOString() }));
+    expect(att.getCharacteristic(C.OccupancyDetected).value).toBe(1);
+  });
+
+  it('does not claim the drawer reading is live while the robot is switched off', async () => {
+    const acc = await launch();
+    const { Service: S, Characteristic: C } = fake.api.hap;
+    const alert = acc.getServiceById(S.OccupancySensor, 'drawer-alert')!;
+    expect(alert.getCharacteristic(C.StatusActive).value).toBe(true);
+    handlerFor(acc).update(robot({ unitPowerStatus: 'OFF', robotStatus: 'ROBOT_POWER_OFF' }));
+    expect(alert.getCharacteristic(C.StatusActive).value).toBe(false);
+  });
+
+  it('marks exactly one primary service, asserting both sides', async () => {
+    const acc = await launch();
+    const { Service: S } = fake.api.hap;
+    const primaries = acc.services.filter((s) => s.isPrimaryService).map((s) => s.displayName);
+    expect(primaries).toEqual(['Drawer Full']);
+    expect(acc.getServiceById(S.FilterMaintenance, 'drawer')!.isPrimaryService).toBe(false);
+  });
+
+  it('never fabricates robot state when sending a command', async () => {
+    const acc = await launch();
+    const { Service: S, Characteristic: C } = fake.api.hap;
+    const att = acc.getServiceById(S.OccupancySensor, 'attention')!;
+    // A real cause is present, and a command must not erase it by inventing a robotStatus.
+    handlerFor(acc).update(robot({ isBonnetRemoved: true }));
+    expect(att.getCharacteristic(C.OccupancyDetected).value).toBe(1);
+    await homekitWrite(acc.getServiceById(S.Switch, 'reset')!, C.On, true);
+    await new Promise((r) => setImmediate(r));
+    expect(att.getCharacteristic(C.OccupancyDetected).value).toBe(1);
+    // The optimistic acknowledgement still reaches the characteristic the command targets.
+    expect(acc.getServiceById(S.FilterMaintenance, 'drawer')!.getCharacteristic(C.FilterLifeLevel).value).toBe(100);
   });
 
   it('keeps the cached robot when the cloud is unreachable at startup', async () => {

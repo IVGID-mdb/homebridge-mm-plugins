@@ -10,6 +10,10 @@ export interface RobotView {
   powered: boolean;
   cycling: boolean;
   catDetected: boolean;
+  /** The raw cat field, kept so an unfamiliar value can be logged rather than silently trusted. */
+  catDetectRaw: string;
+  /** False when the cat field held a value this code does not recognise. */
+  catDetectRecognised: boolean;
   drawerFull: boolean;
   /** 0..100 remaining drawer capacity, so 100 means freshly emptied. */
   drawerRemainingPct: number;
@@ -18,6 +22,8 @@ export interface RobotView {
   /** The robot's own verdict on litter, which is trusted ahead of the percentage. */
   litterLowReported: boolean | undefined;
   bonnetRemoved: boolean;
+  /** Whether an optional LitterHopper appears to be attached at all. */
+  hopperFitted: boolean;
   hopperProblem: boolean;
   motorFault: boolean;
   laserDirty: boolean;
@@ -30,30 +36,37 @@ const CYCLING = new Set(['ROBOT_CLEAN', 'ROBOT_FIND_DUMP', 'ROBOT_EMPTY']);
 const CAT = new Set(['ROBOT_CAT_DETECT', 'ROBOT_CAT_DETECT_DELAY']);
 const POWER_OFF = new Set(['ROBOT_POWER_OFF', 'ROBOT_POWER_DOWN']);
 
+/** Values of catDetect that positively mean "the globe is empty". Everything else means a cat. */
+const CAT_CLEAR = /^(CAT_DETECT_CLEAR|CLEAR|NONE|FALSE|NO|0)$/;
+/** Shapes of catDetect this code has seen before. An unfamiliar value is still treated as a cat. */
+const CAT_KNOWN = /^(CAT_DETECT.*|CLEAR|NONE|FALSE|NO|0)$/;
+
 export function viewOf(r: RobotData): RobotView {
   const status = String(r.robotStatus ?? '');
   const powerStatus = String(r.unitPowerStatus ?? '').toUpperCase();
   const online = r.isOnline !== false;
   const poweredOff = powerStatus === 'OFF' || POWER_OFF.has(status);
   const cycleState = String(r.robotCycleState ?? '');
-  const catDetect = String(r.catDetect ?? '');
-  const hopperStatus = String(r.hopperStatus ?? '').toUpperCase();
+  const catDetectRaw = String(r.catDetect ?? '').trim().toUpperCase();
+  const hopper = hopperOf(r);
   return {
     online,
     poweredOff,
     powered: online && !poweredOff,
     cycling: online && !poweredOff && CYCLING.has(status),
-    catDetected:
-      CAT.has(status) ||
-      cycleState === 'CYCLE_STATE_CAT_DETECT' ||
-      (catDetect.startsWith('CAT_DETECT') && catDetect !== 'CAT_DETECT_CLEAR'),
+    // FAIL CLOSED. This predicate gates a rotating globe, so an unfamiliar value must mean a cat
+    // is present, never that the coast is clear. Only a positively recognised clear value clears it.
+    catDetected: CAT.has(status) || cycleState === 'CYCLE_STATE_CAT_DETECT' || (catDetectRaw !== '' && !CAT_CLEAR.test(catDetectRaw)),
+    catDetectRaw,
+    catDetectRecognised: catDetectRaw === '' || CAT_KNOWN.test(catDetectRaw),
     drawerFull: Boolean(r.isDFIFull),
     drawerRemainingPct: clampPct(100 - num(r.DFILevelPercent, 0)),
     litterPct: litterRemaining(r.litterLevelPercentage),
     litterLowReported: litterStateLow(r.litterLevelState),
     bonnetRemoved: Boolean(r.isBonnetRemoved) || status === 'ROBOT_BONNET',
-    hopperProblem: Boolean(r.isHopperRemoved) || (hopperStatus !== '' && !/^(ENABLED|OK|NOMINAL|MOTOR_OK)$/.test(hopperStatus)),
-    motorFault: truthyFault(r.globeMotorFaultStatus),
+    hopperFitted: hopper.fitted,
+    hopperProblem: hopper.problem,
+    motorFault: motorFaultOf(r.globeMotorFaultStatus),
     laserDirty: Boolean(r.isLaserDirty),
     lastSeenAt: parseTime(r.lastSeen),
     status,
@@ -102,6 +115,34 @@ export function litterIsLow(v: RobotView, litterLowPercent: number): boolean {
   return v.litterPct <= litterLowPercent;
 }
 
+/**
+ * The LitterHopper is an optional accessory. An account without one reports it as removed, so
+ * treating that as a fault would pin the alert on forever and make the whole channel useless.
+ * A hopper only counts as fitted when the robot reports a status for it that is not an
+ * absent marker, and only a positively recognised fault word counts as trouble.
+ */
+function hopperOf(r: RobotData): { fitted: boolean; problem: boolean } {
+  const s = String(r.hopperStatus ?? '').trim().toUpperCase();
+  const absent = s === '' || /DISABLED|NOT_INSTALLED|UNINSTALLED|ABSENT|NONE|REMOVED/.test(s);
+  if (absent) return { fitted: false, problem: false };
+  const faulty = /FAULT|JAM|STALL|ERROR|EMPTY|MOTOR_FAULT/.test(s) || Boolean(r.isHopperRemoved);
+  return { fitted: true, problem: faulty };
+}
+
+/**
+ * FAIL OPEN, deliberately, and opposite to the cat guard. The motor-status vocabulary is not
+ * documented, so treating every unfamiliar string as a fault would latch a hardware alert that
+ * can never clear on a perfectly healthy robot. Only a recognised fault word counts.
+ */
+function motorFaultOf(v: unknown): boolean {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  const s = String(v ?? '').toUpperCase();
+  if (!s) return false;
+  if (/CLEAR|NONE|NO_FAULT|NOMINAL|GOOD|^OK$|^FALSE$|^0$/.test(s)) return false;
+  return /FAULT|STALL|JAM|OVERCURRENT|ERROR|FAIL/.test(s);
+}
+
 function litterStateLow(state: unknown): boolean | undefined {
   const s = String(state ?? '').toUpperCase();
   if (!s) return undefined;
@@ -119,14 +160,6 @@ function litterRemaining(raw: unknown): number {
   const n = num(raw, NaN);
   if (!Number.isFinite(n)) return 100;
   return clampPct(n <= 1 ? n * 100 : n);
-}
-
-function truthyFault(v: unknown): boolean {
-  if (typeof v === 'boolean') return v;
-  if (typeof v === 'number') return v !== 0;
-  const s = String(v ?? '').toUpperCase();
-  if (!s) return false;
-  return !/^(NONE|OK|FAULT_CLEAR|CLEAR|NO_FAULT|FALSE|0)$/.test(s);
 }
 
 function parseTime(v: unknown): number | undefined {

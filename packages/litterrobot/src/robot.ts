@@ -51,12 +51,15 @@ export class LitterRobotAccessory implements AccessoryHandler {
   private readonly attention: Service;
   private readonly cleanSwitch: Service | undefined;
   private readonly poller: Poller;
+  private readonly timers = new Set<NodeJS.Timeout>();
   private data: RobotData;
   private view: RobotView;
   private cleanRequestedAt = 0;
   private offlineSince: number | undefined;
   private poweredOffSince: number | undefined;
   private lastReasons = '';
+  private warnedCatValue = '';
+  private disposed = false;
 
   constructor(
     private readonly deps: RobotDeps,
@@ -92,7 +95,7 @@ export class LitterRobotAccessory implements AccessoryHandler {
         .onGet(() =>
           this.guarded().drawerFull ? C.OccupancyDetected.OCCUPANCY_DETECTED : C.OccupancyDetected.OCCUPANCY_NOT_DETECTED,
         );
-      this.drawerAlert.getCharacteristic(C.StatusActive).onGet(() => this.reachable());
+      this.drawerAlert.getCharacteristic(C.StatusActive).onGet(() => this.readingIsLive());
       this.drawerAlert.addLinkedService(this.drawer);
     }
 
@@ -105,7 +108,7 @@ export class LitterRobotAccessory implements AccessoryHandler {
         .onSet(async (v) => {
           if (!v) return;
           await this.emptied();
-          setTimeout(() => this.resetSwitch?.updateCharacteristic(C.On, false), 1000).unref?.();
+          this.later(() => this.resetSwitch?.updateCharacteristic(C.On, false), 1000);
         });
     }
 
@@ -137,14 +140,18 @@ export class LitterRobotAccessory implements AccessoryHandler {
         .onSet(async (v) => {
           if (!v) return; // the API cannot abort a running cycle; let the true state spring back
           this.refuseIfCatInside();
-          await this.command(LR4Command.CLEAN_CYCLE, { robotStatus: 'ROBOT_CLEAN' });
           this.cleanRequestedAt = Date.now();
+          await this.command(LR4Command.CLEAN_CYCLE, () => {
+            this.cleanSwitch?.updateCharacteristic(C.On, true);
+          });
         });
     }
 
-    // Mark the chore as the accessory's identity.
-    if (this.drawerAlert) this.drawerAlert.setPrimaryService(true);
-    else this.drawer.setPrimaryService(true);
+    // Exactly one primary service. Both branches are asserted, never just the winning one, because
+    // the flag is persisted in the accessory cache and a restored service keeps it across a config
+    // change, which would otherwise leave two services flagged primary.
+    this.drawer.setPrimaryService(!this.drawerAlert);
+    this.drawerAlert?.setPrimaryService(true);
 
     pruneServices(accessory, keep, deps.log);
     // The poller must exist before the first push, because the reachability check reads its
@@ -156,7 +163,10 @@ export class LitterRobotAccessory implements AccessoryHandler {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.poller.stop();
+    for (const t of this.timers) clearTimeout(t);
+    this.timers.clear();
   }
 
   /** Called by the platform (and tests) when fresh data is already in hand. */
@@ -164,11 +174,22 @@ export class LitterRobotAccessory implements AccessoryHandler {
     this.push(data);
   }
 
+  /** A timer that is cancelled on shutdown and never fires into a disposed accessory. */
+  private later(fn: () => void, ms: number): void {
+    const t = setTimeout(() => {
+      this.timers.delete(t);
+      if (!this.disposed) fn();
+    }, ms);
+    t.unref?.();
+    this.timers.add(t);
+  }
+
   // ---- safety ------------------------------------------------------------------------------
 
   /**
    * A cycle rotates the globe. Exposing that to Siri, scenes and automations without a guard means
    * one misheard phrase can turn it with a cat inside, so a detected cat refuses the write outright.
+   * The underlying predicate fails closed: an unfamiliar cat value counts as a cat.
    */
   private refuseIfCatInside(): void {
     if (!this.view.catDetected) return;
@@ -190,22 +211,32 @@ export class LitterRobotAccessory implements AccessoryHandler {
     return Date.now() - seen > this.deps.staleMs;
   }
 
-  private reachable(): boolean {
-    return this.view.online && !this.isStale() && this.poller.consecutiveFailures === 0;
+  /**
+   * Whether the drawer reading currently means anything. A switched-off robot is not filling its
+   * drawer, so the number it last reported is frozen and must not be advertised as live.
+   */
+  private readingIsLive(): boolean {
+    return this.view.powered && !this.isStale() && this.poller.consecutiveFailures === 0;
   }
 
-  /** Elapsed-time bookkeeping, so a blip does not raise an alarm but a real outage does. */
-  private updateSustained(gotData: boolean): void {
+  /**
+   * One clock for "something is abnormal", carried across when the cause changes. Handing off
+   * between two independent clocks used to reset the debounce, so the alert cleared for a whole
+   * window at the moment a switched-off robot also went silent.
+   */
+  private updateSustained(observed: boolean): void {
     const now = Date.now();
-    const reachable = gotData && this.view.online && !this.isStale();
+    const reachable = observed && this.view.online && !this.isStale();
     if (reachable) {
+      const carried = this.offlineSince;
       this.offlineSince = undefined;
-      if (this.view.poweredOff) this.poweredOffSince ??= now;
+      if (this.view.poweredOff) this.poweredOffSince ??= carried ?? now;
       else this.poweredOffSince = undefined;
     } else {
-      this.offlineSince ??= now;
+      const carried = this.poweredOffSince;
       // While unreachable we cannot see the power switch, so do not claim it is off.
       this.poweredOffSince = undefined;
+      this.offlineSince ??= carried ?? now;
     }
   }
 
@@ -231,7 +262,14 @@ export class LitterRobotAccessory implements AccessoryHandler {
   // ---- device ------------------------------------------------------------------------------
 
   private async emptied(): Promise<void> {
-    await this.command(LR4Command.SHORT_RESET_PRESS, { DFILevelPercent: 0, isDFIFull: false });
+    const C = this.deps.api.hap.Characteristic;
+    await this.command(LR4Command.SHORT_RESET_PRESS, () => {
+      // Show the acknowledgement immediately, but only on the characteristics the command targets.
+      // The confirming poll replaces these with whatever the robot actually reports.
+      this.drawer.updateCharacteristic(C.FilterLifeLevel, 100);
+      this.drawer.updateCharacteristic(C.FilterChangeIndication, C.FilterChangeIndication.FILTER_OK);
+      this.drawerAlert?.updateCharacteristic(C.OccupancyDetected, C.OccupancyDetected.OCCUPANCY_NOT_DETECTED);
+    });
   }
 
   private async refresh(): Promise<void> {
@@ -247,11 +285,19 @@ export class LitterRobotAccessory implements AccessoryHandler {
       this.push(fresh);
       return;
     }
+    // A poll that succeeds but returns no robot is not evidence the robot is healthy.
     this.updateSustained(false);
     this.pushAttention();
+    throw new Error('the account returned no record for this robot');
   }
 
-  private async command(cmd: (typeof LR4Command)[keyof typeof LR4Command], expected: Partial<RobotData> = {}): Promise<void> {
+  /**
+   * Send a command. The optimistic callback may touch only the characteristics the command
+   * targets; it must never be folded into the stored payload, because that payload is what the
+   * fault predicate reads and fabricating a status there erases real causes such as a removed
+   * bonnet and resets the outage clock from data the robot never sent.
+   */
+  private async command(cmd: (typeof LR4Command)[keyof typeof LR4Command], optimistic?: () => void): Promise<void> {
     try {
       this.deps.log.info(`→ ${cmd}`);
       await this.deps.whisker.sendCommand(this.data.serial, cmd);
@@ -259,11 +305,10 @@ export class LitterRobotAccessory implements AccessoryHandler {
       this.deps.log.warn(`${cmd} failed: ${errorMessage(err)}`);
       throw commFailure(this.deps.api);
     }
-    const next = { ...this.data, ...expected };
-    setImmediate(() => this.push(next));
+    if (optimistic) setImmediate(optimistic);
     // The robot reports back within a few seconds; confirm then, and again once it has settled.
-    setTimeout(() => void this.poller.now(), 5000).unref?.();
-    setTimeout(() => void this.poller.now(), 30_000).unref?.();
+    this.later(() => void this.poller.now(), 5000);
+    this.later(() => void this.poller.now(), 30_000);
   }
 
   // ---- publishing --------------------------------------------------------------------------
@@ -274,6 +319,14 @@ export class LitterRobotAccessory implements AccessoryHandler {
     this.view = viewOf(data);
     this.updateSustained(true);
 
+    if (!this.view.catDetectRecognised && this.warnedCatValue !== this.view.catDetectRaw) {
+      this.warnedCatValue = this.view.catDetectRaw;
+      this.deps.log.warn(
+        `Unfamiliar cat sensor value "${this.view.catDetectRaw}". Treating it as a cat present, ` +
+          'so a clean cycle will be refused until it clears.',
+      );
+    }
+
     // One evaluation of the drawer, fanned out, so the gauge and the alert cannot disagree.
     const full = this.view.drawerFull;
     this.drawer.updateCharacteristic(C.FilterChangeIndication, full ? C.FilterChangeIndication.CHANGE_FILTER : C.FilterChangeIndication.FILTER_OK);
@@ -282,7 +335,7 @@ export class LitterRobotAccessory implements AccessoryHandler {
       C.OccupancyDetected,
       full ? C.OccupancyDetected.OCCUPANCY_DETECTED : C.OccupancyDetected.OCCUPANCY_NOT_DETECTED,
     );
-    this.drawerAlert?.updateCharacteristic(C.StatusActive, this.reachable());
+    this.drawerAlert?.updateCharacteristic(C.StatusActive, this.readingIsLive());
     this.cleanSwitch?.updateCharacteristic(C.On, this.cleanSwitchOn());
     this.pushAttention();
 
