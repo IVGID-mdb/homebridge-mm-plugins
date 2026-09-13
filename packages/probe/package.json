@@ -1,0 +1,26 @@
+{
+  "name": "homebridge-mm-render-probe",
+  "displayName": "MM HomeKit Render Probe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Throwaway diagnostic plugin. Publishes one of each candidate HomeKit service with fixed values so you can see what the Apple Home app actually renders. Not a real accessory; install, look, uninstall.",
+  "license": "MIT",
+  "author": "mdb",
+  "type": "module",
+  "main": "dist/index.js",
+  "files": [
+    "dist/index.js",
+    "config.schema.json",
+    "README.md"
+  ],
+  "keywords": [
+    "homebridge-plugin"
+  ],
+  "engines": {
+    "node": "^22.10.0 || ^24.0.0",
+    "homebridge": "^1.8.0 || ^2.0.0"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build.mjs probe"
+  }
+}

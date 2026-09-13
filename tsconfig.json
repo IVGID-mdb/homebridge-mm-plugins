@@ -5,6 +5,7 @@
     { "path": "packages/bond" },
     { "path": "packages/modernforms" },
     { "path": "packages/intellifire" },
-    { "path": "packages/litterrobot" }
+    { "path": "packages/litterrobot" },
+    { "path": "packages/probe" }
   ]
 }

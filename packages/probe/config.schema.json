@@ -1,0 +1,17 @@
+{
+  "pluginAlias": "MMRenderProbe",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Diagnostic only. Publishes three fake accessories whose tiles answer questions Apple documents nowhere: what an occupancy tile actually says, whether a Filter Maintenance service appears on its own, and whether its reset control is reachable. Pair the child bridge, look at the Home app, then uninstall.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "Render Probe",
+        "required": true
+      }
+    }
+  }
+}
