@@ -33,7 +33,7 @@ export class BondCeilingFan extends BondAccessoryBase {
     const max = Number(ctx.device.properties.max_speed);
     this.levels = Number.isInteger(max) && max > 0 ? max : 3;
 
-    this.fan = ensureService(deps.api, accessory, S.Fanv2, accessory.displayName);
+    this.fan = ensureService(deps.api, accessory, S.Fanv2, accessory.displayName, { primary: true });
     this.keep.add(this.fan);
     this.writes = new WriteCoalescer<FanWrite>((ch) => this.applyFanWrite(ch));
 
@@ -45,7 +45,10 @@ export class BondCeilingFan extends BondAccessoryBase {
       })
       .onSet((v) => this.writes.write('active', Number(v)));
 
-    if (this.has('SetSpeed') || this.has('IncreaseSpeed')) {
+    // Only publish a speed slider the device can actually satisfy. A fan with IncreaseSpeed but no
+    // SetSpeed cannot be sent to a chosen speed, and advertising the control anyway would give the
+    // user a slider that silently does nothing but switch the fan on.
+    if (this.has('SetSpeed')) {
       this.fan
         .getCharacteristic(C.RotationSpeed)
         .setProps({ minValue: 0, maxValue: 100, minStep: 1 })

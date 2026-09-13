@@ -31,7 +31,14 @@ export const FLAME_LEVELS = 4; // 0..4
 export const FAN_LEVELS = 4; // 0..4
 export const LIGHT_LEVELS = 3; // 0..3
 export const SETPOINT_MIN_C = 10;
-export const SETPOINT_MAX_C = 37;
+/**
+ * Apple caps HeatingThresholdTemperature at 25 °C (77 °F) — Float, Celsius, 0..25 step 0.1 per
+ * HomeKitADK HAP/HAPCharacteristicTypes.h, HAP spec R14 section 9.42. An accessory may narrow that
+ * range but never widen it, so HomeKit cannot reach the fireplace's full native ceiling of 37 °C.
+ * The device-side command range (COMMAND_NAMES.setpoint, up to 3700 centi-°C) is deliberately left
+ * wider: a setpoint chosen on the fireplace itself is still reported and honoured.
+ */
+export const SETPOINT_MAX_C = 25;
 
 export function parseFireplaceState(raw: Record<string, unknown>, prev?: Partial<FireplaceState>): FireplaceState {
   const n = (k: string, fallback: number) => {

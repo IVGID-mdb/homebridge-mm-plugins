@@ -51,9 +51,12 @@ interface BlowerWrite {
  *  HeaterCooler.CurrentHeaterCoolerState    ← INACTIVE / HEATING (IDLE when thermostat is satisfied)
  *  HeaterCooler.TargetHeaterCoolerState     = HEAT (only valid value)
  *  HeaterCooler.CurrentTemperature          ← temperature (°C)
- *  HeaterCooler.HeatingThresholdTemperature ← setpoint/100 (°C) → thermostat_setpoint (°C×100)   [if thermostat]
+ *  HeaterCooler.HeatingThresholdTemperature ← setpoint/100 (°C) → thermostat_setpoint (°C×100)
+ *      Always published: a heater must include it (HAPServiceTypes.h). Writes are refused when the
+ *      unit reports no thermostat feature, rather than the characteristic being withheld.
  *  HeaterCooler.RotationSpeed               ← height 0..4 as 0/25/50/75/100 % → flame_height
- *  HeaterCooler.TemperatureDisplayUnits     = FAHRENHEIT (display hint only; HAP is always °C)
+ *      NOTE: RotationSpeed is defined as fan speed, and the blower already has its own Fanv2.
+ *      Carrying flame height here is under review; see docs/homekit/heating.md.
  *  Fanv2 "Blower".Active/RotationSpeed      ← fanspeed 0..4     → fan_speed                        [if fan]
  *  Lightbulb "Accent Light".On/Brightness   ← light 0..3        → light                            [if light]
  *  Switch (optional)                        ← power              → power
@@ -84,7 +87,7 @@ export class FireplaceAccessory implements AccessoryHandler {
     });
     const keep = new Set<Service>();
 
-    this.heater = ensureService(deps.api, accessory, S.HeaterCooler, accessory.displayName);
+    this.heater = ensureService(deps.api, accessory, S.HeaterCooler, accessory.displayName, { primary: true });
     keep.add(this.heater);
     this.heaterWrites = new WriteCoalescer<HeaterWrite>((ch) => this.applyHeaterWrite(ch));
     this.blowerWrites = new WriteCoalescer<BlowerWrite>((ch) => this.applyBlowerWrite(ch));
@@ -110,20 +113,17 @@ export class FireplaceAccessory implements AccessoryHandler {
       .setProps({ minValue: 0, maxValue: 100, minStep: 1 })
       .onGet(() => levelToPercent(this.current().height, FLAME_LEVELS))
       .onSet((v) => this.heaterWrites.write('flame', Number(v)));
-    this.heater.getCharacteristic(C.TemperatureDisplayUnits).updateValue(C.TemperatureDisplayUnits.FAHRENHEIT);
 
-    const hasThermostat = initial?.hasThermostat ?? true;
-    if (hasThermostat) {
-      // Default is 0 °C which is below our minimum; give it a legal value before tightening props.
-      const setpoint = this.heater.getCharacteristic(C.HeatingThresholdTemperature);
-      setpoint.updateValue(clamp(initial?.setpointC ?? 22, SETPOINT_MIN_C, SETPOINT_MAX_C));
-      setpoint
-        .setProps({ minValue: SETPOINT_MIN_C, maxValue: SETPOINT_MAX_C, minStep: 0.5 })
-        .onGet(() => clamp(this.current().setpointC, SETPOINT_MIN_C, SETPOINT_MAX_C))
-        .onSet((v) => this.heaterWrites.write('setpoint', Number(v)));
-    } else if (this.heater.testCharacteristic(C.HeatingThresholdTemperature)) {
-      this.heater.removeCharacteristic(this.heater.getCharacteristic(C.HeatingThresholdTemperature));
-    }
+    // A heater must include HeatingThresholdTemperature, so publish it unconditionally rather than
+    // withholding it from a unit with no thermostat; such a unit refuses writes instead.
+    // The characteristic defaults to 0 °C, below our minimum, so give it a legal value before
+    // tightening the props.
+    const setpoint = this.heater.getCharacteristic(C.HeatingThresholdTemperature);
+    setpoint.updateValue(clamp(initial?.setpointC ?? 22, SETPOINT_MIN_C, SETPOINT_MAX_C));
+    setpoint
+      .setProps({ minValue: SETPOINT_MIN_C, maxValue: SETPOINT_MAX_C, minStep: 0.5 })
+      .onGet(() => clamp(this.current().setpointC, SETPOINT_MIN_C, SETPOINT_MAX_C))
+      .onSet((v) => this.heaterWrites.write('setpoint', Number(v)));
 
     if (deps.exposeBlower && (initial?.hasFan ?? false)) {
       this.blower = ensureService(deps.api, accessory, S.Fanv2, `${accessory.displayName} Blower`, 'blower');
@@ -227,6 +227,10 @@ export class FireplaceAccessory implements AccessoryHandler {
       await this.send('height', clamp(Math.round((clamp(ch.flame, 0, 100) / 100) * FLAME_LEVELS), 0, FLAME_LEVELS));
     }
     if (ch.setpoint !== undefined) {
+      if (this.state && !this.state.hasThermostat) {
+        this.deps.log.warn('setpoint write refused: this fireplace reports no thermostat');
+        throw commFailure(this.deps.api);
+      }
       const c = clamp(ch.setpoint, SETPOINT_MIN_C, SETPOINT_MAX_C);
       await this.send('setpoint', Math.round(c * 100), { setpointC: Math.round(c * 2) / 2, thermostat: true });
     }

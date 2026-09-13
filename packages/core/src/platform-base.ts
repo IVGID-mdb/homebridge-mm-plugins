@@ -1,6 +1,13 @@
 import type { API, DynamicPlatformPlugin, Logging, PlatformAccessory, PlatformConfig } from 'homebridge';
 import { errorMessage } from './logging.js';
 
+/**
+ * How many consecutive successful discovery passes must omit a device before we unregister it.
+ * A hub that answers but returns a short list is not proof a device is gone, and HomeKit gives the
+ * user no way to restore a single bridged accessory once it is removed.
+ */
+const STALE_MISSES = 3;
+
 /** What a concrete platform tells the base about each device it found. */
 export interface DiscoveredDevice<TContext extends object = object> {
   /** Stable, globally unique seed (serial, MAC, bond id + device id …). Never a display name. */
@@ -138,9 +145,24 @@ export abstract class BasePlatform<TContext extends object = object> implements 
     }
 
     if (this.options.removeStale ?? true) {
-      const stale = [...this.cached.values()].filter((a) => !seen.has(a.UUID));
+      // Require several consecutive misses before destroying an accessory: one short listing from
+      // a flaky hub should not cost the user a device they cannot add back themselves.
+      const stale: PlatformAccessory[] = [];
+      for (const a of this.cached.values()) {
+        if (seen.has(a.UUID)) {
+          a.context.missCount = 0;
+          continue;
+        }
+        const misses = Number(a.context.missCount ?? 0) + 1;
+        a.context.missCount = misses;
+        if (misses < STALE_MISSES) {
+          this.log.info(`"${a.displayName}" was not discovered (${misses}/${STALE_MISSES}); keeping it for now`);
+          continue;
+        }
+        stale.push(a);
+      }
       for (const a of stale) {
-        this.log.info(`Removing stale accessory "${a.displayName}"`);
+        this.log.info(`Removing stale accessory "${a.displayName}" after ${STALE_MISSES} missed discoveries`);
         this.handlers.get(a.UUID)?.dispose();
         this.handlers.delete(a.UUID);
         this.cached.delete(a.UUID);

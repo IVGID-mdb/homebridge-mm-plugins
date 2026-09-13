@@ -133,6 +133,15 @@ type CharCtor = WithUUID<{ new (): hap.Characteristic }>;
  */
 export async function homekitWrite(service: Service, ctor: CharCtor, value: unknown): Promise<void> {
   const ch = service.getCharacteristic(ctor as never);
+  // A real controller write is checked against format, range, step, valid values and maxLen BEFORE
+  // any handler runs, and a violation is answered -70410 without the accessory ever seeing it.
+  // hap-nodejs skips that check when handleSetRequest is called with no connection, so run it here
+  // explicitly; otherwise the harness would be more forgiving than the thing it simulates.
+  const validate = (ch as unknown as { validateClientSuppliedValue?: (v: unknown) => unknown })
+    .validateClientSuppliedValue;
+  if (typeof validate === 'function') {
+    validate.call(ch, value);
+  }
   await ch.handleSetRequest(value as hap.CharacteristicValue);
 }
 

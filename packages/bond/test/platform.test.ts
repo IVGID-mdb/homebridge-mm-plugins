@@ -142,9 +142,36 @@ describe('MMBond platform with a fake BD-1000', () => {
     expect(bond.actions).toHaveLength(0);
   });
 
-  it('removes accessories that are no longer on the Bond and keeps the rest', async () => {
+  it('holds a missing accessory for a grace period, then removes it', async () => {
     await fake.launch(platform);
-    // Simulate a Homebridge restart with a stale cached accessory from a removed device.
+    // Simulate a Homebridge restart with a cached accessory whose Bond device is gone.
+    const fake2 = createFakeApi();
+    const stale = new fake2.api.platformAccessory('Living Room Fireplace', platform.uuidFor('ZZTEST0001:deadbeef'));
+    stale.context.device = { id: 'deadbeef', info: { type: 'FP', name: 'Fireplace', actions: [] }, properties: {} };
+    const config = { platform: 'MMBond', bonds: [{ host: bond.host, token: bond.token }], push: false } as PlatformConfig;
+    const logs2: string[] = [];
+    const p2 = new BondPlatform(fakeLog(logs2), config, fake2.api);
+    p2.configureAccessory(stale);
+    p2.configureAccessory(fake.registered[0]!);
+
+    // One short listing from a flaky hub is not proof the device is gone, and HomeKit gives the
+    // user no way to restore a single bridged accessory, so the first miss must not destroy it.
+    await fake2.launch(p2);
+    expect(fake2.registered).toHaveLength(0);
+    expect(fake2.unregistered).toHaveLength(0);
+    expect(fake2.updated.map((a) => a.displayName)).toEqual(['Living Room Ceiling fan']);
+    expect(logs2.some((l) => l.includes('1/3'))).toBe(true);
+
+    // Still held after a second miss; removed once the evidence is consistent.
+    await p2.runDiscovery();
+    expect(fake2.unregistered).toHaveLength(0);
+    await p2.runDiscovery();
+    expect(fake2.unregistered.map((a) => a.displayName)).toEqual(['Living Room Fireplace']);
+    fake2.shutdown();
+  });
+
+  it('resets the miss counter when a device reappears before the grace period expires', async () => {
+    await fake.launch(platform);
     const fake2 = createFakeApi();
     const stale = new fake2.api.platformAccessory('Living Room Fireplace', platform.uuidFor('ZZTEST0001:deadbeef'));
     stale.context.device = { id: 'deadbeef', info: { type: 'FP', name: 'Fireplace', actions: [] }, properties: {} };
@@ -153,9 +180,18 @@ describe('MMBond platform with a fake BD-1000', () => {
     p2.configureAccessory(stale);
     p2.configureAccessory(fake.registered[0]!);
     await fake2.launch(p2);
-    expect(fake2.registered).toHaveLength(0);
-    expect(fake2.unregistered.map((a) => a.displayName)).toEqual(['Living Room Fireplace']);
-    expect(fake2.updated.map((a) => a.displayName)).toEqual(['Living Room Ceiling fan']);
+    expect(stale.context.missCount).toBe(1);
+
+    // The device comes back on the Bond before the third strike.
+    bond.devices.set('deadbeef', {
+      info: { name: 'Fireplace', type: 'FP', location: 'Living Room', actions: ['TurnOn', 'TurnOff'] },
+      properties: {},
+      state: { power: 0 },
+    });
+    await p2.runDiscovery();
+    expect(stale.context.missCount).toBe(0);
+    await p2.runDiscovery();
+    expect(fake2.unregistered).toHaveLength(0);
     fake2.shutdown();
   });
 
